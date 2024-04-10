@@ -16,6 +16,9 @@ from diffusers.models import AutoencoderKL
 from download import find_model
 from models import DiT_models
 import argparse
+from utils.device_utils import is_npu_available
+if is_npu_available():
+    from torch_npu.contrib import transfer_to_npu
 
 
 def main(args):

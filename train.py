@@ -30,6 +30,9 @@ import os
 from models import DiT_models
 from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
+from utils.device_utils import is_npu_available
+if is_npu_available():
+    from torch_npu.contrib import transfer_to_npu
 
 
 #################################################################################
