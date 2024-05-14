@@ -180,6 +180,27 @@ def main(args):
     )
     logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
 
+
+    val_dataset = ImageFolder(args.data_path, transform=transform)
+    val_sampler = DistributedSampler(
+        val_dataset,
+        num_replicas=dist.get_world_size(),
+        rank=rank,
+        shuffle=True,
+        seed=args.global_seed
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=int(args.global_batch_size // dist.get_world_size()),
+        shuffle=False,
+        sampler=val_sampler,
+        num_workers=0,
+        pin_memory=False,
+        drop_last=True
+    )
+    logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
+
+
     # Prepare models for training:
     update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()  # important! This enables embedding dropout for classifier-free guidance
@@ -242,6 +263,35 @@ def main(args):
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
                 dist.barrier()
+
+        val_steps = 0
+        val_running_loss = 0
+        val_sampler.set_epoch(epoch)
+        logger.info(f"Beginning validation for epoch {epoch}...")
+        model.eval()
+        with torch.no_grad():
+            for x, y in val_loader:
+                x = x.to(device)
+                y = y.to(device)
+                with torch.no_grad():
+                    # Map input images to latent space + normalize latents:
+                    x = vae.encode(x).latent_dist.sample().mul_(0.18215)
+                t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
+                model_kwargs = dict(y=y)
+                loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+                loss = loss_dict["loss"].mean()
+    
+                val_running_loss += loss.item()
+                log_steps += 1
+                val_steps += 1
+
+            # Reduce loss history over all processes:
+            avg_loss = torch.tensor(val_running_loss / val_steps, device=device)
+            dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
+            avg_loss = avg_loss.item() / dist.get_world_size()
+            logger.info(f"(epoch={epoch:07d}) Val Loss: {avg_loss:.4f}")
+
+        model.train()
 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
