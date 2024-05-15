@@ -174,15 +174,15 @@ def main(args):
 
     all_urls = list(
         braceexpand.braceexpand(
-            "gs://world-labs-ai-europe-west4/data/ffhq/wds/"
-            "{00000..69000..1000}.tar"
+            os.path.join(args.data_path,
+            "{00000..69000..1000}.tar")
         )
     )
     train_urls = all_urls[:-4]
     val_urls = all_urls[-4:]
 
     train_dataset = wds.DataPipeline(
-        wds.SimpleShardList(train_urls),
+        wds.ResampledShards(train_urls),
         wds.split_by_node,
         wds.split_by_worker,
         wds.cached_tarfile_to_samples(
@@ -204,7 +204,7 @@ def main(args):
     )
 
     val_dataset = wds.DataPipeline(
-        wds.SimpleShardList(val_urls),
+        wds.ResampledShards(val_urls),
         wds.split_by_node,
         wds.split_by_worker,
         wds.cached_tarfile_to_samples(
@@ -215,14 +215,14 @@ def main(args):
         wds.decode("pil"),
         wds.to_tuple("png"),
         wds.map(preprocess),
-        wds.shuffle(1000),
+        wds.shuffle(1000, initial=1000),
         wds.batched(int(args.global_batch_size // dist.get_world_size()), partial=False),
     )
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=None,
         pin_memory=False,
-        num_workers=0,
+        num_workers=args.num_workers,
     )
 
 
@@ -237,87 +237,85 @@ def main(args):
     running_loss = 0
     start_time = time()
 
-    logger.info(f"Training for {args.epochs} epochs...")
-    for epoch in range(args.epochs):
-        logger.info(f"Beginning epoch {epoch}...")
-        for x, y in train_loader:
-            x = x.to(device)
-            y = y.to(device)
-            with torch.no_grad():
-                # Map input images to latent space + normalize latents:
-                x = vae.encode(x).latent_dist.sample().mul_(0.18215)
-            t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(y=y)
-            loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
-            loss = loss_dict["loss"].mean()
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            update_ema(ema, model.module)
-
-            # Log loss values:
-            running_loss += loss.item()
-            log_steps += 1
-            train_steps += 1
-            if train_steps % args.log_every == 0:
-                # Measure training speed:
-                torch.cuda.synchronize()
-                end_time = time()
-                steps_per_sec = log_steps / (end_time - start_time)
-                # Reduce loss history over all processes:
-                avg_loss = torch.tensor(running_loss / log_steps, device=device)
-                dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
-                avg_loss = avg_loss.item() / dist.get_world_size()
-                logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
-                if rank == 0:
-                    summary_writer.add_scalar("train/loss", avg_loss, train_steps)
-                # Reset monitoring variables:
-                running_loss = 0
-                log_steps = 0
-                start_time = time()
-
-            # Save DiT checkpoint:
-            if train_steps % args.ckpt_every == 0 and train_steps > 0:
-                if rank == 0:
-                    checkpoint = {
-                        "model": model.module.state_dict(),
-                        "ema": ema.state_dict(),
-                        "opt": opt.state_dict(),
-                        "args": args
-                    }
-                    checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
-                    torch.save(checkpoint, checkpoint_path)
-                    logger.info(f"Saved checkpoint to {checkpoint_path}")
-                dist.barrier()
-
-        val_steps = 0
-        val_running_loss = 0
-        logger.info(f"Beginning validation for epoch {epoch}...")
-        model.eval()
+    for x, y in train_loader:
+        x = x.to(device)
+        y = y.to(device)
         with torch.no_grad():
-            for x, y in val_loader:
-                x = x.to(device)
-                y = y.to(device)
-                with torch.no_grad():
-                    # Map input images to latent space + normalize latents:
-                    x = vae.encode(x).latent_dist.sample().mul_(0.18215)
-                t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-                model_kwargs = dict(y=y)
-                loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
-                loss = loss_dict["loss"].mean()
-    
-                val_running_loss += loss.item()
-                val_steps += 1
+            # Map input images to latent space + normalize latents:
+            x = vae.encode(x).latent_dist.sample().mul_(0.18215)
+        t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
+        model_kwargs = dict(y=y)
+        loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+        loss = loss_dict["loss"].mean()
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        update_ema(ema, model.module)
 
+        # Log loss values:
+        running_loss += loss.item()
+        log_steps += 1
+        train_steps += 1
+        if train_steps % args.log_every == 0:
+            # Measure training speed:
+            torch.cuda.synchronize()
+            end_time = time()
+            steps_per_sec = log_steps / (end_time - start_time)
             # Reduce loss history over all processes:
-            avg_loss = torch.tensor(val_running_loss / val_steps, device=device)
+            avg_loss = torch.tensor(running_loss / log_steps, device=device)
             dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
             avg_loss = avg_loss.item() / dist.get_world_size()
-            logger.info(f"(epoch={epoch:07d}) Val Loss: {avg_loss:.4f}")
+            logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
             if rank == 0:
-                summary_writer.add_scalar("val/loss", avg_loss, train_steps)
+                summary_writer.add_scalar("train/loss", avg_loss, train_steps)
+            # Reset monitoring variables:
+            running_loss = 0
+            log_steps = 0
+            start_time = time()
 
-        model.train()
+        # Save DiT checkpoint:
+        if train_steps % args.ckpt_every == 0 and train_steps > 0:
+            if rank == 0:
+                checkpoint = {
+                    "model": model.module.state_dict(),
+                    "ema": ema.state_dict(),
+                    "opt": opt.state_dict(),
+                    "args": args
+                }
+                checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
+                torch.save(checkpoint, checkpoint_path)
+                logger.info(f"Saved checkpoint to {checkpoint_path}")
+            dist.barrier()
+
+        if train_steps % args.val_every == 0 and train_steps > 0:
+            val_steps = 0
+            val_running_loss = 0
+            logger.info(f"Beginning validation...")
+            with torch.no_grad():
+                for x, y in val_loader:
+                    x = x.to(device)
+                    y = y.to(device)
+                    with torch.no_grad():
+                        # Map input images to latent space + normalize latents:
+                        x = vae.encode(x).latent_dist.sample().mul_(0.18215)
+                    t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
+                    model_kwargs = dict(y=y)
+                    loss_dict = diffusion.training_losses(ema, x, t, model_kwargs)
+                    loss = loss_dict["loss"].mean()
+        
+                    val_running_loss += loss.item()
+                    val_steps += 1
+                    if val_steps == 50:
+                        break
+
+                # Reduce loss history over all processes:
+                avg_loss = torch.tensor(val_running_loss / val_steps, device=device)
+                dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
+                avg_loss = avg_loss.item() / dist.get_world_size()
+                logger.info(f"(step={train_steps:07d}) Val Loss: {avg_loss:.4f}")
+                if rank == 0:
+                    summary_writer.add_scalar("val/loss", avg_loss, train_steps)
+            logger.info(f"Validation complete.")
 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
