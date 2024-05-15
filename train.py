@@ -12,6 +12,7 @@ import torch
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 import torch.distributed as dist
+from torch.utils.tensorboard import SummaryWriter
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
@@ -26,6 +27,8 @@ from time import time
 import argparse
 import logging
 import os
+import webdataset as wds
+import braceexpand
 
 from models import DiT_models
 from diffusion import create_diffusion
@@ -133,8 +136,10 @@ def main(args):
         os.makedirs(checkpoint_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
         logger.info(f"Experiment directory created at {experiment_dir}")
+        summary_writer = SummaryWriter(experiment_dir)
     else:
         logger = create_logger(None)
+        summary_writer = None
 
     # Create model:
     assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
@@ -161,44 +166,62 @@ def main(args):
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
     ])
-    dataset = ImageFolder(args.data_path, transform=transform)
-    sampler = DistributedSampler(
-        dataset,
-        num_replicas=dist.get_world_size(),
-        rank=rank,
-        shuffle=True,
-        seed=args.global_seed
+
+    def preprocess(sample):
+        image, = sample
+        return transform(image), torch.tensor(0, dtype=torch.long)
+
+    all_urls = list(
+        braceexpand.braceexpand(
+            "gs://world-labs-ai-europe-west4/data/ffhq/wds/"
+            "{00000..69000..1000}.tar"
+        )
     )
-    loader = DataLoader(
-        dataset,
-        batch_size=int(args.global_batch_size // dist.get_world_size()),
-        shuffle=False,
-        sampler=sampler,
-        num_workers=args.num_workers,
+    train_urls = all_urls[:-3]
+    val_urls = all_urls[-3:]
+
+    train_dataset = wds.DataPipeline(
+        wds.SimpleShardList(train_urls),
+        wds.split_by_node,
+        wds.split_by_worker,
+        wds.cached_tarfile_to_samples(
+            cache_dir="/mnt/local_ssd/wds_cache",
+            verbose=False,
+            handler=wds.warn_and_continue,
+        ),
+        wds.decode("pil"),
+        wds.to_tuple("png"),
+        wds.map(preprocess),
+        wds.shuffle(1000, initial=1000),
+        wds.batched(int(args.global_batch_size // dist.get_world_size()), partial=False),
+    )
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=None,
         pin_memory=True,
-        drop_last=True
+        num_workers=args.num_workers,
     )
-    logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
 
-
-    val_dataset = ImageFolder(args.data_path, transform=transform)
-    val_sampler = DistributedSampler(
-        val_dataset,
-        num_replicas=dist.get_world_size(),
-        rank=rank,
-        shuffle=True,
-        seed=args.global_seed
+    val_dataset = wds.DataPipeline(
+        wds.SimpleShardList(val_urls),
+        wds.split_by_node,
+        wds.split_by_worker,
+        wds.cached_tarfile_to_samples(
+            cache_dir="/mnt/local_ssd/wds_cache",
+            verbose=False,
+            handler=wds.warn_and_continue,
+        ),
+        wds.decode("pil"),
+        wds.to_tuple("png"),
+        wds.map(preprocess),
+        wds.batched(int(args.global_batch_size // dist.get_world_size()), partial=False),
     )
-    val_loader = DataLoader(
+    val_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size=int(args.global_batch_size // dist.get_world_size()),
-        shuffle=False,
-        sampler=val_sampler,
-        num_workers=0,
+        batch_size=None,
         pin_memory=False,
-        drop_last=True
+        num_workers=0,
     )
-    logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
 
 
     # Prepare models for training:
@@ -214,9 +237,8 @@ def main(args):
 
     logger.info(f"Training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
-        sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
-        for x, y in loader:
+        for x, y in train_loader:
             x = x.to(device)
             y = y.to(device)
             with torch.no_grad():
@@ -245,6 +267,8 @@ def main(args):
                 dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
                 avg_loss = avg_loss.item() / dist.get_world_size()
                 logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                if rank == 0:
+                    summary_writer.add_scalar("train/loss", avg_loss, train_steps)
                 # Reset monitoring variables:
                 running_loss = 0
                 log_steps = 0
@@ -266,7 +290,6 @@ def main(args):
 
         val_steps = 0
         val_running_loss = 0
-        val_sampler.set_epoch(epoch)
         logger.info(f"Beginning validation for epoch {epoch}...")
         model.eval()
         with torch.no_grad():
@@ -290,6 +313,8 @@ def main(args):
             dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
             avg_loss = avg_loss.item() / dist.get_world_size()
             logger.info(f"(epoch={epoch:07d}) Val Loss: {avg_loss:.4f}")
+            if rank == 0:
+                summary_writer.add_scalar("val/loss", avg_loss, train_steps)
 
         model.train()
 
@@ -297,6 +322,7 @@ def main(args):
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
 
     logger.info("Done!")
+    summary_writer.close()
     cleanup()
 
 

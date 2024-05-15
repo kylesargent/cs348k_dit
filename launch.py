@@ -3,6 +3,12 @@ import argparse
 from train import main
 from models import DiT_models
 
+class Task:
+    def __call__(self, args):
+        submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+        main(args)
+
+
 if __name__ == "__main__":
     # Default args here will train DiT-XL/2 with the hyperparameters we used in our paper (except training iters).
     parser = argparse.ArgumentParser()
@@ -21,19 +27,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
 
-    NUM_TASKS_PER_NODE = 1
+    NUM_TASKS_PER_NODE = 4
 
     executor = submitit.AutoExecutor(folder="logs")
     executor.update_parameters(
         timeout_min=60*36,
-        slurm_partition="viscam",
-        account="viscam",
-        slurm_additional_parameters={"nodelist": "viscam2,viscam5,viscam9"},
+        # slurm_partition="viscam",
+        # account="viscam",
+        # slurm_additional_parameters={"nodelist": "viscam2,viscam5,viscam9"},
         nodes=1,
         gpus_per_node=NUM_TASKS_PER_NODE,
         tasks_per_node=NUM_TASKS_PER_NODE,
         mem_gb=64,
         cpus_per_task=8,
     )
-    job = executor.submit(main, args)
+    task = Task()
+    job = executor.submit(task, args)
     print(job.job_id)
