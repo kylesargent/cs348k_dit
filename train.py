@@ -161,6 +161,7 @@ def main(args):
 
     # Setup data:
     transform = transforms.Compose([
+        transforms.RandomResizedCrop(256, scale=(0.8, 1.0), ratio=(0.9, 1.1), interpolation=Image.BICUBIC),
         transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
@@ -177,8 +178,8 @@ def main(args):
             "{00000..69000..1000}.tar"
         )
     )
-    train_urls = all_urls[:-3]
-    val_urls = all_urls[-3:]
+    train_urls = all_urls[:-4]
+    val_urls = all_urls[-4:]
 
     train_dataset = wds.DataPipeline(
         wds.SimpleShardList(train_urls),
@@ -214,6 +215,7 @@ def main(args):
         wds.decode("pil"),
         wds.to_tuple("png"),
         wds.map(preprocess),
+        wds.shuffle(1000),
         wds.batched(int(args.global_batch_size // dist.get_world_size()), partial=False),
     )
     val_loader = torch.utils.data.DataLoader(
@@ -305,7 +307,6 @@ def main(args):
                 loss = loss_dict["loss"].mean()
     
                 val_running_loss += loss.item()
-                log_steps += 1
                 val_steps += 1
 
             # Reduce loss history over all processes:
