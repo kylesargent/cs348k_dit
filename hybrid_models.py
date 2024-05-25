@@ -381,6 +381,10 @@ def HybridDiT_XL_2_Slow(**kwargs):
 def HybridDiT_XL_2_Fast_Comp(**kwargs):
     return HybridDiT(depth=28, hidden_size=1728, patch_size=2, num_heads=16, res_block_channels=64, **kwargs)
 
+def HybridDiT_XL_2_Fast_Comp_ReLU(**kwargs):
+    return HybridDiT(depth=28, hidden_size=1728, patch_size=2, num_heads=16, res_block_channels=256, res_activation=nn.ReLU, **kwargs)
+
+
 def HybridDiT_XL_2_Slow_Comp(**kwargs): # OOM
     return HybridDiT(depth=28, hidden_size=1728, patch_size=2, num_heads=16, res_block_channels=256, downsample_factor=1, **kwargs)
 
@@ -391,4 +395,5 @@ HybridDiT_models = {
     'HybridDiT-XL/2-Slow': HybridDiT_XL_2_Slow,
     'HybridDiT-XL/2-Fast-Comp': HybridDiT_XL_2_Fast_Comp,
     'HybridDiT-XL/2-Slow-Comp': HybridDiT_XL_2_Slow_Comp,
+    'HybridDiT-XL/2-Fast-Comp-ReLU': HybridDiT_XL_2_Fast_Comp_ReLU,
 }

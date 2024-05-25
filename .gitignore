@@ -1,1 +1,6 @@
 .venv
+.venv_s
+logs
+results
+results-hybrid
+__pycache__
