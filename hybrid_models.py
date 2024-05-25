@@ -147,18 +147,21 @@ class ResBlock(nn.Module):
             self,
             in_channels,
             out_channels,
+            out_res,
             up_down_sample=None,
+            activation=nn.GELU,
     ):
         super().__init__()
         self.up_down_sample = up_down_sample
         self.conv1 = nn.Conv2d(in_channels, out_channels, 3, 1, 1)
         self.conv2 = nn.Conv2d(out_channels, out_channels, 3, 1, 1)
-        self.norm1 = nn.LayerNorm(out_channels)
-        self.norm2 = nn.LayerNorm(out_channels)
-        self.act = nn.GELU()
+        self.proj = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+        self.norm1 = nn.LayerNorm((out_channels, out_res, out_res))
+        self.norm2 = nn.LayerNorm((out_channels, out_res, out_res))
+        self.act = activation()
 
     def forward(self, x):
-        identity = x
+        identity = self.proj(x)
 
         if self.up_down_sample is not None:
             x = self.up_down_sample(x)
@@ -184,15 +187,22 @@ class HybridDiT(nn.Module):
         class_dropout_prob=0.1,
         num_classes=1000,
         learn_sigma=True,
+        downsample_factor=2,
+        res_block_channels=256,
+        res_activation=nn.GELU,
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
         self.in_channels = in_channels
         self.out_channels = in_channels * 2 if learn_sigma else in_channels
+        self.patchify_out_channels = res_block_channels
         self.patch_size = patch_size
         self.num_heads = num_heads
 
-        self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
+        self.in_res_1 = ResBlock(in_channels, res_block_channels, input_size, activation=res_activation)
+        self.in_res_2 = ResBlock(res_block_channels, res_block_channels, input_size//downsample_factor, up_down_sample=nn.AvgPool2d(downsample_factor), activation=res_activation)
+
+        self.x_embedder = PatchEmbed(input_size//downsample_factor, patch_size, res_block_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
         num_patches = self.x_embedder.num_patches
@@ -202,7 +212,11 @@ class HybridDiT(nn.Module):
         self.blocks = nn.ModuleList([
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
-        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
+        self.final_layer = FinalLayer(hidden_size, patch_size, res_block_channels)
+
+        self.out_res_1 = ResBlock(res_block_channels, res_block_channels, input_size, up_down_sample=nn.Upsample(scale_factor=downsample_factor), activation=res_activation)
+        self.out_res_2 = ResBlock(res_block_channels, self.out_channels, input_size, activation=res_activation)
+
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -246,7 +260,7 @@ class HybridDiT(nn.Module):
         x: (N, T, patch_size**2 * C)
         imgs: (N, H, W, C)
         """
-        c = self.out_channels
+        c = self.patchify_out_channels
         p = self.x_embedder.patch_size[0]
         h = w = int(x.shape[1] ** 0.5)
         assert h * w == x.shape[1]
@@ -263,6 +277,8 @@ class HybridDiT(nn.Module):
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
         """
+        x = self.in_res_1(x)
+        x = self.in_res_2(x)
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
         y = self.y_embedder(y, self.training)    # (N, D)
@@ -271,6 +287,8 @@ class HybridDiT(nn.Module):
             x = block(x, c)                      # (N, T, D)
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
         x = self.unpatchify(x)                   # (N, out_channels, H, W)
+        x = self.out_res_1(x)
+        x = self.out_res_2(x)
         return x
 
     def forward_with_cfg(self, x, t, y, cfg_scale):
@@ -354,7 +372,23 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 def HybridDiT_XL_2(**kwargs):
     return HybridDiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
 
+def HybridDiT_XL_2_Fast(**kwargs):
+    return HybridDiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, res_block_channels=64, **kwargs)
+
+def HybridDiT_XL_2_Slow(**kwargs):
+    return HybridDiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, res_block_channels=256, downsample_factor=1, **kwargs)
+
+def HybridDiT_XL_2_Fast_Comp(**kwargs):
+    return HybridDiT(depth=28, hidden_size=1728, patch_size=2, num_heads=16, res_block_channels=64, **kwargs)
+
+def HybridDiT_XL_2_Slow_Comp(**kwargs): # OOM
+    return HybridDiT(depth=28, hidden_size=1728, patch_size=2, num_heads=16, res_block_channels=256, downsample_factor=1, **kwargs)
+
 
 HybridDiT_models = {
     'HybridDiT-XL/2': HybridDiT_XL_2,
+    'HybridDiT-XL/2-Fast': HybridDiT_XL_2_Fast,
+    'HybridDiT-XL/2-Slow': HybridDiT_XL_2_Slow,
+    'HybridDiT-XL/2-Fast-Comp': HybridDiT_XL_2_Fast_Comp,
+    'HybridDiT-XL/2-Slow-Comp': HybridDiT_XL_2_Slow_Comp,
 }
