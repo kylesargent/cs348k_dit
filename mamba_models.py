@@ -13,8 +13,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 import math
+from dataclasses import dataclass
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
-
+from mamba.vim import ResidualBlock
+from typing import Union
 
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
@@ -98,18 +100,53 @@ class LabelEmbedder(nn.Module):
 #                                 Core DiT Model                                #
 #################################################################################
 
-class DiTBlock(nn.Module):
+
+@dataclass
+class MambaConfig:
+    d_model: int # D
+    n_layers: int
+    dt_rank: Union[int, str] = 'auto'
+    d_state: int = 16 # N in paper/comments
+    expand_factor: int = 2 # E in paper/comments
+    d_conv: int = 4
+
+    dt_min: float = 0.001
+    dt_max: float = 0.1
+    dt_init: str = "random" # "random" or "constant"
+    dt_scale: float = 1.0
+    dt_init_floor = 1e-4
+
+    rms_norm_eps: float = 1e-5
+
+    bias: bool = False
+    conv_bias: bool = True
+    inner_layernorms: bool = False # apply layernorms to internal activations
+
+    pscan: bool = True # use parallel scan mode or sequential mode when training
+    use_cuda: bool = True # use official CUDA implementation when training (not compatible with (b)float16)
+
+    bidirectional: bool = True # use bidirectional MambaBlock
+
+    divide_output: bool = True
+
+    def __post_init__(self):
+        self.d_inner = self.expand_factor * self.d_model # E*D = ED in comments
+
+        if self.dt_rank == 'auto':
+            self.dt_rank = math.ceil(self.d_model / 16)
+
+class MambaBlock(nn.Module):
     """
     A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
+    def __init__(self, hidden_size):
         super().__init__()
-        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
-        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
-        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+
+
+        config = MambaConfig(d_model=hidden_size, n_layers=0)
+
+        self.mamba_residual_block_1 = ResidualBlock(config)
+        self.mamba_residual_block_2 = ResidualBlock(config)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
@@ -117,10 +154,13 @@ class DiTBlock(nn.Module):
 
     def forward(self, x, c):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
-        return x
+        # x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        # x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
 
+        x = x + gate_msa.unsqueeze(1) * self.mamba_residual_block_1(modulate(x, shift_msa, scale_msa))
+        x = x + gate_mlp.unsqueeze(1) * self.mamba_residual_block_2(modulate(x, shift_mlp, scale_mlp))
+
+        return x
 
 class FinalLayer(nn.Module):
     """
@@ -142,7 +182,7 @@ class FinalLayer(nn.Module):
         return x
 
 
-class DiT(nn.Module):
+class MambaDiT(nn.Module):
     """
     Diffusion model with a Transformer backbone.
     """
@@ -174,7 +214,7 @@ class DiT(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
         self.blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            MambaBlock(hidden_size) for _ in range(depth)
         ])
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
@@ -325,55 +365,10 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #                                   DiT Configs                                  #
 #################################################################################
 
-def DiT_XL_2(**kwargs):
-    return DiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
+def Mamba_M(**kwargs):
+    return MambaDiT(depth=20, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
+    # return MambaDiT(depth=14, hidden_size=768, patch_size=2, num_heads=16)
 
-def DiT_XL_4(**kwargs):
-    return DiT(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
-
-def DiT_XL_8(**kwargs):
-    return DiT(depth=28, hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
-
-def DiT_L_2(**kwargs):
-    return DiT(depth=24, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
-
-def DiT_L_4(**kwargs):
-    return DiT(depth=24, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
-
-def DiT_L_8(**kwargs):
-    return DiT(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
-
-def DiT_B_2(**kwargs):
-    return DiT(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
-
-def DiT_B_4(**kwargs):
-    return DiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, **kwargs)
-
-def DiT_B_8(**kwargs):
-    return DiT(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
-
-def DiT_S_2(**kwargs):
-    return DiT(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
-
-def DiT_S_4(**kwargs):
-    return DiT(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
-
-def DiT_S_8(**kwargs):
-    return DiT(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
-
-
-DiT_models = {
-    'DiT-XL/2': DiT_XL_2,  'DiT-XL/4': DiT_XL_4,  'DiT-XL/8': DiT_XL_8,
-    'DiT-L/2':  DiT_L_2,   'DiT-L/4':  DiT_L_4,   'DiT-L/8':  DiT_L_8,
-    'DiT-B/2':  DiT_B_2,   'DiT-B/4':  DiT_B_4,   'DiT-B/8':  DiT_B_8,
-    'DiT-S/2':  DiT_S_2,   'DiT-S/4':  DiT_S_4,   'DiT-S/8':  DiT_S_8,
+MambaModels = {
+    'Mamba-M/2': Mamba_M,
 }
-
-from hybrid_models import HybridDiT_models
-DiT_models.update(HybridDiT_models)
-
-from models_improved_transformer import DiT_plus_models
-DiT_models.update(DiT_plus_models)
-
-from mamba_models import MambaModels
-DiT_models.update(MambaModels)

@@ -142,7 +142,36 @@ class FinalLayer(nn.Module):
         return x
 
 
-class DiT(nn.Module):
+class ResBlock(nn.Module):
+    def __init__(
+            self,
+            in_channels,
+            out_channels,
+            out_res,
+            up_down_sample=None,
+            activation=nn.GELU,
+    ):
+        super().__init__()
+        self.up_down_sample = up_down_sample
+        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, 1, 1)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, 1, 1)
+        self.proj = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+        self.norm1 = nn.LayerNorm((out_channels, out_res, out_res))
+        self.norm2 = nn.LayerNorm((out_channels, out_res, out_res))
+        self.act = activation()
+
+    def forward(self, x):
+        identity = self.proj(x)
+
+        if self.up_down_sample is not None:
+            x = self.up_down_sample(x)
+            identity = self.up_down_sample(identity)
+        
+        x = self.norm1(self.act(self.conv1(x)))
+        x = self.norm2(self.act(self.conv2(x)))
+        return (x + identity) / math.sqrt(2)
+
+class HybridDiT(nn.Module):
     """
     Diffusion model with a Transformer backbone.
     """
@@ -158,15 +187,22 @@ class DiT(nn.Module):
         class_dropout_prob=0.1,
         num_classes=1000,
         learn_sigma=True,
+        downsample_factor=2,
+        res_block_channels=256,
+        res_activation=nn.GELU,
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
         self.in_channels = in_channels
         self.out_channels = in_channels * 2 if learn_sigma else in_channels
+        self.patchify_out_channels = res_block_channels
         self.patch_size = patch_size
         self.num_heads = num_heads
 
-        self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
+        self.in_res_1 = ResBlock(in_channels, res_block_channels, input_size, activation=res_activation)
+        self.in_res_2 = ResBlock(res_block_channels, res_block_channels, input_size//downsample_factor, up_down_sample=nn.AvgPool2d(downsample_factor), activation=res_activation)
+
+        self.x_embedder = PatchEmbed(input_size//downsample_factor, patch_size, res_block_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
         num_patches = self.x_embedder.num_patches
@@ -176,7 +212,11 @@ class DiT(nn.Module):
         self.blocks = nn.ModuleList([
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
-        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
+        self.final_layer = FinalLayer(hidden_size, patch_size, res_block_channels)
+
+        self.out_res_1 = ResBlock(res_block_channels, res_block_channels, input_size, up_down_sample=nn.Upsample(scale_factor=downsample_factor), activation=res_activation)
+        self.out_res_2 = ResBlock(res_block_channels, self.out_channels, input_size, activation=res_activation)
+
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -220,7 +260,7 @@ class DiT(nn.Module):
         x: (N, T, patch_size**2 * C)
         imgs: (N, H, W, C)
         """
-        c = self.out_channels
+        c = self.patchify_out_channels
         p = self.x_embedder.patch_size[0]
         h = w = int(x.shape[1] ** 0.5)
         assert h * w == x.shape[1]
@@ -237,6 +277,8 @@ class DiT(nn.Module):
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
         """
+        x = self.in_res_1(x)
+        x = self.in_res_2(x)
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
         y = self.y_embedder(y, self.training)    # (N, D)
@@ -245,6 +287,8 @@ class DiT(nn.Module):
             x = block(x, c)                      # (N, T, D)
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
         x = self.unpatchify(x)                   # (N, out_channels, H, W)
+        x = self.out_res_1(x)
+        x = self.out_res_2(x)
         return x
 
     def forward_with_cfg(self, x, t, y, cfg_scale):
@@ -325,55 +369,31 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #                                   DiT Configs                                  #
 #################################################################################
 
-def DiT_XL_2(**kwargs):
-    return DiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
+def HybridDiT_XL_2(**kwargs):
+    return HybridDiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
 
-def DiT_XL_4(**kwargs):
-    return DiT(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
+def HybridDiT_XL_2_Fast(**kwargs):
+    return HybridDiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, res_block_channels=64, **kwargs)
 
-def DiT_XL_8(**kwargs):
-    return DiT(depth=28, hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
+def HybridDiT_XL_2_Slow(**kwargs):
+    return HybridDiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, res_block_channels=256, downsample_factor=1, **kwargs)
 
-def DiT_L_2(**kwargs):
-    return DiT(depth=24, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
+def HybridDiT_XL_2_Fast_Comp(**kwargs):
+    return HybridDiT(depth=28, hidden_size=1728, patch_size=2, num_heads=16, res_block_channels=64, **kwargs)
 
-def DiT_L_4(**kwargs):
-    return DiT(depth=24, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
-
-def DiT_L_8(**kwargs):
-    return DiT(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
-
-def DiT_B_2(**kwargs):
-    return DiT(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
-
-def DiT_B_4(**kwargs):
-    return DiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, **kwargs)
-
-def DiT_B_8(**kwargs):
-    return DiT(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
-
-def DiT_S_2(**kwargs):
-    return DiT(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
-
-def DiT_S_4(**kwargs):
-    return DiT(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
-
-def DiT_S_8(**kwargs):
-    return DiT(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
+def HybridDiT_XL_2_Fast_Comp_ReLU(**kwargs):
+    return HybridDiT(depth=28, hidden_size=1728, patch_size=2, num_heads=16, res_block_channels=256, res_activation=nn.ReLU, **kwargs)
 
 
-DiT_models = {
-    'DiT-XL/2': DiT_XL_2,  'DiT-XL/4': DiT_XL_4,  'DiT-XL/8': DiT_XL_8,
-    'DiT-L/2':  DiT_L_2,   'DiT-L/4':  DiT_L_4,   'DiT-L/8':  DiT_L_8,
-    'DiT-B/2':  DiT_B_2,   'DiT-B/4':  DiT_B_4,   'DiT-B/8':  DiT_B_8,
-    'DiT-S/2':  DiT_S_2,   'DiT-S/4':  DiT_S_4,   'DiT-S/8':  DiT_S_8,
+def HybridDiT_XL_2_Slow_Comp(**kwargs): # OOM
+    return HybridDiT(depth=28, hidden_size=1728, patch_size=2, num_heads=16, res_block_channels=256, downsample_factor=1, **kwargs)
+
+
+HybridDiT_models = {
+    'HybridDiT-XL/2': HybridDiT_XL_2,
+    'HybridDiT-XL/2-Fast': HybridDiT_XL_2_Fast,
+    'HybridDiT-XL/2-Slow': HybridDiT_XL_2_Slow,
+    'HybridDiT-XL/2-Fast-Comp': HybridDiT_XL_2_Fast_Comp,
+    'HybridDiT-XL/2-Slow-Comp': HybridDiT_XL_2_Slow_Comp,
+    'HybridDiT-XL/2-Fast-Comp-ReLU': HybridDiT_XL_2_Fast_Comp_ReLU,
 }
-
-from hybrid_models import HybridDiT_models
-DiT_models.update(HybridDiT_models)
-
-from models_improved_transformer import DiT_plus_models
-DiT_models.update(DiT_plus_models)
-
-from mamba_models import MambaModels
-DiT_models.update(MambaModels)
