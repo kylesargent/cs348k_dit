@@ -374,3 +374,6 @@ DiT_models.update(HybridDiT_models)
 
 from models_improved_transformer import DiT_plus_models
 DiT_models.update(DiT_plus_models)
+
+from mamba_models import MambaModels
+DiT_models.update(MambaModels)
