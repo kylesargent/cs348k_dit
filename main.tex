@@ -1,0 +1,60 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algorithmicx}
+\usepackage{algpseudocode}
+\usepackage[normalem]{ulem}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}{Corollary}[theorem]
+
+
+\newcommand\norm[1]{\left\lVert#1\right\rVert}
+\newcommand\numberthis{\addtocounter{equation}{1}\tag{\theequation}}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\newcommand{\diff}{\mathrm{d}}
+\newcommand{\xx}{\boldsymbol{x}}
+\newcommand{\ff}{\boldsymbol{f}}
+\newcommand{\bg}{\boldsymbol{g}} % \gg is already in use
+\newcommand{\nablaxx}{\nabla_{\hspace{-0.5mm}\xx}}
+\newcommand{\II}{\mathbf{I}}
+\newcommand{\DD}{\mathbf{D}}
+
+
+% Edit highlighting.
+\definecolor{olive}{rgb}{0.5, 0.5, 0.0}
+\definecolor{maroon}{rgb}{0.69, 0.19, 0.38}
+\definecolor{celestialblue}{rgb}{0.29, 0.59, 0.82}
+\definecolor{darkgreen}{rgb}{0.0, 0.6, 0.0}
+\definecolor{grey}{rgb}{0.5,0.5,0.5}
+\definecolor{darkblue}{rgb}{0.19, 0.19, 0.62}
+\definecolor{silver}{rgb}{0.7,0.7,0.7}
+\definecolor{darkcyan}{rgb}{0.0, 0.55, 0.55}
+\def\clap#1{\hbox to 0pt{\hss #1\hss}}%
+\def\initials#1{\protect\clap{\smash{\raisebox{1.4ex}{\tiny{\textsf{\textit{#1}}}}}}}%
+\newcommand{\EDIT}[4][]{\strut{\color{#3}{\hspace{0pt}\initials{#2}{\color{red}\sout{#1}}{#4}}}}
+\newcommand{\EC}[2][]{\protect\EDIT[#1]{EC}{olive}{#2}}
+\newcommand{\TK}[2][]{\protect\EDIT[#1]{TK}{maroon}{#2}}
+
+
+\title{An Exploration of the Design Space of Diffusion Transformers}
+\author{Kyle Sargent and Eric Chan}
+\date{May 2023}
+
+\begin{document}
+
+\maketitle
+
+\input{sections/1_introduction/sec.tex}
+
+
+\bibliographystyle{plain} % We choose the "plain" reference style
+\bibliography{refs} % Entries are in the refs.bib file
+
+\end{document}

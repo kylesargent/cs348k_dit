@@ -1,0 +1,111 @@
+\section{Introduction}
+
+% Introduce diffusion models
+Diffusion is a framework for generative models that has shown
+to be our current most-powerful tool for synthesizing images, videos
+and other data modalities.
+
+A diffusion model generates images by transforming randomly drawn
+samples of noise into samples from the data distribution following
+an iterative denoising process. It has been shown that the evolution
+of a noisy sample through time is driven by a stochastic differential
+equation, with the image a 'particle' undergoing a random walk, under
+the influence of a score function. Training a diffusion model amounts
+to training a neural network that approximates this score function.
+% Show SDE, maybe a chart too
+
+
+The goal of training a diffusion model is to train a network
+that produces images with the best image quality possible.
+Taking into account limited compute, our goal is to train a model
+that achieves the best image quality under a fixed compute constraint.
+In our case, we limited each experiment to six GPU-days of compute
+(usually using 4 GPUs and 1.5 days of training).
+
+
+Beyond applications, which apply known
+diffusion frameworks and network architectures to new tasks, fundamental
+improvements in diffusion models has focused on either theory, where new
+formulations or interpretations of the diffusion processes have been proposed
+(e.g. new stochastic differential equations that are easier to simulate), or in
+network design, where new architectures for the score-prediction network
+have been proposed. Network design for diffusion models has been a
+field of intense study over the last couple of years. The UNet~\cite{?},
+long the architecture of choice for diffusion models and other image-image tasks
+has been supplanted by networks that make much greater use of transformers~\cite{sdxl, uvit}
+or even architectures that use transformers exclusively~\cite{DiT}.
+
+This recent class of models based on diffusion transformers has generated
+excitement throughout the diffusion community because of its use
+in OpenAI's Sora, which was huge leap forward for video synthesis and
+demonstrated that transformer-only diffusion networks could succeed at massive
+scale. But while Sora demonstrated that diffusion networks based on transformers could
+succeed at scale, it remains to be seen if variants on the architecture might
+have the potential to further improve on top of Sora.
+
+Transformers have been shown to perform extrodinarily well at many tasks, enabling
+them to infiltrate nearly every field of AI, from language modeling, to audio generation
+to computer vision. Yet, their strength in long-range dependency modeling, which is a result
+of the global nature of the attention operation, has a downside—quadratic $O(N^2)$ compute,
+where $N$ is the sequence length. This limitation makes it difficult to use extremely long
+context windows in language models, where $N$ may be the number of words in the sentence, or
+in vision tasks like image diffusion models, where $N$ may be the number of pixels in the image.
+For diffusion models in particular, this limitation requires diffusion transformers to operate
+on patches of an image—a typical choice is to chunk the image into $16 \times 16$ patches to
+make attention computationally feasible, but this naturally sacrifices some ability to model
+high frequencies.
+
+An alternative to the transformer has started to gain momentum in the language modeling community:
+State-Space Models. By formulating the sequence as ..., they achieve global dependency using only
+$O(N \log (N))$ compute. State-Space Models, like Mamba, have begun to show promise in language modeling,
+albeit only at relatively small scale. A natural question arises: will the same benefits
+of sub-quadradic compute carry over for diffusion models?
+
+Our project began as an investigation into whether sub-quadratic attention
+could improve the performance/compute ratio in diffusion models but evolved into a
+broader exploration into various design choices and architectures for diffusion models.
+
+In particular, starting from a diffusion transformers baseline, we make the following modifications:
+
+\begin{enumerate}
+    \item Replace transformers with sub-quadratic attention based on Mamba.
+    \item Hybridize the diffusion transformer model by adding additional convolutional residual blocks.
+    \item Replace transformer blocks with improved transformer blocks, using alternative normalization and activation functions, making use of the best-practices from recent language models.
+    \item Add weight decay to investigate overfitting.
+\end{enumerate}
+
+
+% we study the following
+% List out the design decisions we make
+% Mamba
+% Weight decay
+% Baselines hybridizing the diffusion transformer model by adding additional
+% convolutional residual blocks
+% Improved transformer blocks, taking the best-practices from 
+% recent language models (LLAMA) by replacing LayerNorm with RMSNorm and
+% the activation function with SwiGLU
+
+
+
+
+
+% Introduce diffusion Transformers
+
+% Relatively recent, so room for improvement
+% Especially drawing from language models
+
+% Mamba and sub-quadratic attention
+% Began as an investigation into whether sub-quadratic attention
+% could help but evolved into a broader exploration into various design
+% choices and architectures for diffusion models
+
+% In particular, we study the following
+% List out the design decisions we make
+% Mamba
+% Weight decay
+% Baselines hybridizing the diffusion transformer model by adding additional
+% convolutional residual blocks
+% Improved transformer blocks, taking the best-practices from 
+% recent language models (LLAMA) by replacing LayerNorm with RMSNorm and
+% the activation function with SwiGLU
+
