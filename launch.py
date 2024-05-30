@@ -28,7 +28,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
 
-    NUM_TASKS_PER_NODE = 4
+    NUM_TASKS_PER_NODE = 8
 
     executor = submitit.AutoExecutor(folder="logs")
     executor.update_parameters(
@@ -39,9 +39,10 @@ if __name__ == "__main__":
         nodes=1,
         gpus_per_node=NUM_TASKS_PER_NODE,
         tasks_per_node=NUM_TASKS_PER_NODE,
-        mem_gb=64,
+        mem_gb=512,
         cpus_per_task=8,
     )
     task = Task()
     job = executor.submit(task, args)
     print(job.job_id)
+    submitit.helpers.monitor_jobs([job])
