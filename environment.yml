@@ -11,3 +11,7 @@ dependencies:
     - timm
     - diffusers
     - accelerate
+    - webdataset
+    - tensorboard
+    - submitit
+    - mamba-ssm
