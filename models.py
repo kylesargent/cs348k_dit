@@ -15,6 +15,10 @@ import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
 
+import swin
+from swin import SwinTransformerBlock
+
+import linformer
 
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
@@ -122,6 +126,102 @@ class DiTBlock(nn.Module):
         return x
 
 
+class DiTLinformerBlock(nn.Module):
+    """
+    A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
+    """
+    def __init__(self, input_size, linformer_k, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        # self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+        )
+
+        # import pdb
+        # pdb.set_trace()
+
+        self.linformer_attn = linformer.MHAttention(
+            input_size=input_size, 
+            dim=hidden_size//num_heads, 
+            channels=hidden_size,
+            dim_k=linformer_k,
+            nhead=num_heads,
+            dropout=0.0,
+            checkpoint_level=None,
+            parameter_sharing='none',
+            E_proj=None,
+            F_proj=None,
+            full_attention=False,
+            causal_mask=None,
+        )
+
+    def forward(self, x, c):
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
+        
+        attn_in = modulate(self.norm1(x), shift_msa, scale_msa)
+        x = x + gate_msa.unsqueeze(1) * self.linformer_attn(attn_in)
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        return x
+
+
+class DiTSwinBlock(nn.Module):
+    """
+    A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
+    """
+    def __init__(
+        self, hidden_size, num_heads, window_size, shift_size, h, w,
+        mlp_ratio=4.0, **block_kwargs):
+        super().__init__()
+
+        # self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        # self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
+        # self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        # mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        # approx_gelu = lambda: nn.GELU(approximate="tanh")
+        # self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+        
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+        )
+
+        assert not block_kwargs
+        self.swin_block = SwinTransformerBlock(
+            dim=hidden_size,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            window_size=window_size,
+            shift_size=shift_size,
+            h=h,
+            w=w
+        )
+
+    def forward(self, x, c):
+        mask_matrix = swin.get_attention_mask(
+            window_size=self.swin_block.window_size,
+            shift_size=self.swin_block.shift_size,
+            H=self.swin_block.H,
+            W=self.swin_block.W,
+            device=x.device
+        )
+        # print(mask_matrix.shape)
+        # print(mask_matrix)
+        # raise
+
+        adaln_out = self.adaLN_modulation(c).chunk(6, dim=1)
+        return self.swin_block(x, adaln_out, mask_matrix)
+        
+        # x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        # x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        # return x
+
+
 class FinalLayer(nn.Module):
     """
     The final layer of DiT.
@@ -158,6 +258,8 @@ class DiT(nn.Module):
         class_dropout_prob=0.1,
         num_classes=1000,
         learn_sigma=True,
+        swin_window_size=None,
+        linformer_k=None
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
@@ -173,9 +275,30 @@ class DiT(nn.Module):
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
-        self.blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
-        ])
+        if swin_window_size is not None:
+            self.blocks = nn.ModuleList([
+                DiTSwinBlock(
+                    hidden_size, num_heads, mlp_ratio=mlp_ratio, 
+                    window_size=7,
+                    shift_size=0 if (i % 2 == 0) else swin_window_size // 2,
+                    h=input_size // patch_size,
+                    w=input_size // patch_size,
+                ) for i in range(depth)
+            ])
+        elif linformer_k is not None:
+            self.blocks = nn.ModuleList([
+                DiTLinformerBlock(
+                    input_size=(input_size // patch_size) ** 2,
+                    linformer_k=linformer_k,
+                    hidden_size=hidden_size,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio
+                ) for i in range(depth)
+            ])
+        else:
+            self.blocks = nn.ModuleList([
+                DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            ])
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
@@ -362,12 +485,63 @@ def DiT_S_8(**kwargs):
     return DiT(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
 
 
+## Swin models
+def DiT_B_4_Swin3(**kwargs):
+    return DiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, swin_window_size=3, **kwargs)
+def DiT_B_4_Swin5(**kwargs):
+    return DiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, swin_window_size=5, **kwargs)
+def DiT_B_4_Swin7(**kwargs):
+    return DiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, swin_window_size=7, **kwargs)
+
+def DiT_XL_2_Swin3(**kwargs):
+    return DiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, swin_window_size=3, **kwargs)
+def DiT_XL_2_Swin5(**kwargs):
+    return DiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, swin_window_size=5, **kwargs)
+def DiT_XL_2_Swin7(**kwargs):
+    return DiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, swin_window_size=7, **kwargs)
+Swin_models = {
+    "DiT-B/4-Swin3": DiT_B_4_Swin3,
+    "DiT-B/4-Swin5": DiT_B_4_Swin5,
+    "DiT-B/4-Swin7": DiT_B_4_Swin7,
+    "DiT-XL/2-Swin3": DiT_XL_2_Swin3,
+    "DiT-XL/2-Swin5": DiT_XL_2_Swin5,
+    "DiT-XL/2-Swin7": DiT_XL_2_Swin7,
+}
+##
+
+## Linformer models
+def DiT_B_4_Linformer128(**kwargs):
+    return DiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, linformer_k=128, **kwargs)
+def DiT_B_4_Linformer256(**kwargs):
+    return DiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, linformer_k=256, **kwargs)
+def DiT_B_4_Linformer512(**kwargs):
+    return DiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, linformer_k=512, **kwargs)
+
+def DiT_XL_2_Linformer128(**kwargs):
+    return DiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, linformer_k=128, **kwargs)
+def DiT_XL_2_Linformer256(**kwargs):
+    return DiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, linformer_k=256,  **kwargs)
+def DiT_XL_2_Linformer512(**kwargs):
+    return DiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, linformer_k=512,  **kwargs)
+Linformer_models = {
+    "DiT-B/4-Linformer128": DiT_B_4_Linformer128,
+    "DiT-B/4-Linformer256": DiT_B_4_Linformer256,
+    "DiT-B/4-Linformer512": DiT_B_4_Linformer512,
+    "DiT_XL/2-Linformer125": DiT_XL_2_Linformer128,
+    "DiT_XL/2-Linformer256": DiT_XL_2_Linformer256,
+    "DiT_XL/2-Linformer512": DiT_XL_2_Linformer512,
+}
+##
+
 DiT_models = {
     'DiT-XL/2': DiT_XL_2,  'DiT-XL/4': DiT_XL_4,  'DiT-XL/8': DiT_XL_8,
     'DiT-L/2':  DiT_L_2,   'DiT-L/4':  DiT_L_4,   'DiT-L/8':  DiT_L_8,
     'DiT-B/2':  DiT_B_2,   'DiT-B/4':  DiT_B_4,   'DiT-B/8':  DiT_B_8,
     'DiT-S/2':  DiT_S_2,   'DiT-S/4':  DiT_S_4,   'DiT-S/8':  DiT_S_8,
 }
+
+DiT_models.update(Swin_models)
+DiT_models.update(Linformer_models)
 
 from hybrid_models import HybridDiT_models
 DiT_models.update(HybridDiT_models)
