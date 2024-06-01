@@ -47,50 +47,53 @@ from mamba_models import Mamba_M
 from hybrid_models import HybridDiT_XL_2_Slow, HybridDiT_XL_2_Fast_Comp, HybridDiT_XL_2_Fast_Comp_ReLU
 from models_improved_transformer import DiT_plus_XL_2
 
+
+path_prefix = "/mnt/users/ericryanchan/repos/dit_k"
+
 experiments = [
     Experiment(
         "baseline",
-        exp_path="/mnt/users/ericryanchan/repos/dit_k/results/000-DiT-XL-2",
+        exp_path=path_prefix + "results/000-DiT-XL-2",
         model_class=DiT_XL_2,
     ),
     Experiment(
         "mamba",
-        exp_path="/mnt/users/ericryanchan/repos/dit_k/results-mamba/003-Mamba-M-2",
+        exp_path=path_prefix + "results-mamba/003-Mamba-M-2",
         model_class=Mamba_M,
     ),
     Experiment(
         "hybrid",
-        exp_path="/mnt/users/ericryanchan/repos/dit_k/results-hybrid/005-HybridDiT-XL-2-Slow",
+        exp_path=path_prefix + "results-hybrid/005-HybridDiT-XL-2-Slow",
         model_class=HybridDiT_XL_2_Slow,
     ),
     Experiment(
         "hybrid downsample",
-        exp_path="/mnt/users/ericryanchan/repos/dit_k/results-hybrid/006-HybridDiT-XL-2-Fast-Comp",
+        exp_path=path_prefix + "results-hybrid/006-HybridDiT-XL-2-Fast-Comp",
         model_class=HybridDiT_XL_2_Fast_Comp,
     ),
     Experiment(
         "hybrid downsample ReLU",
-        exp_path="/mnt/users/ericryanchan/repos/dit_k/results-hybrid/005-HybridDiT-XL-2-Fast-Comp-ReLU",
+        exp_path=path_prefix + "results-hybrid/005-HybridDiT-XL-2-Fast-Comp-ReLU",
         model_class=HybridDiT_XL_2_Fast_Comp_ReLU,
     ),
     Experiment(
         "weight decay",
-        exp_path="/mnt/users/ericryanchan/repos/dit_k/results-wd-1e-2/000-HybridDiT-XL-2",
+        exp_path=path_prefix + "results-wd-1e-2/000-HybridDiT-XL-2",
         model_class=DiT_XL_2,
     ),
     Experiment(
         "swin",
-        exp_path="/mnt/users/ericryanchan/repos/dit_k/results-swin/000-DiT-XL-2-Swin7",
+        exp_path=path_prefix + "results-swin/000-DiT-XL-2-Swin7",
         model_class=DiT_XL_2_Swin7,
     ),
     Experiment(
         "linformer",
-        exp_path="/mnt/users/ericryanchan/repos/dit_k/results-linformer/001-DiT_XL-2-Linformer256",
+        exp_path=path_prefix + "results-linformer/001-DiT_XL-2-Linformer256",
         model_class=DiT_XL_2_Linformer256,
     ),
     Experiment(
         "transformer++",
-        exp_path="/mnt/users/ericryanchan/repos/dit_k/results-DiT++/000-DiT++-XL-2",
+        exp_path=path_prefix + "results-DiT++/000-DiT++-XL-2",
         model_class=DiT_plus_XL_2,
     ),
 
