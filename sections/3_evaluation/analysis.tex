@@ -1,0 +1,44 @@
+\section{Analysis}
+
+\subsection{Qualitative Results}
+
+% Is it difficult to tell the difference from a small sample size?
+% Are all pretty consistent?
+
+% Are there any clear outliers? Are some noticeably better or worse?
+
+% Note that we train from FFHQ, which is an unlabeled dataset, and so we cannot use guidance.
+% Guidance enables trading off quality and diversity, and generally leads to more visually-appealing results.
+
+\subsection{Quantitative Results}
+
+\subsubsection{Image Quality Metrics}
+
+% Make a table with FID, maybe with KID etc.? Definitely with best? validation and training loss
+
+
+% Does FID correlate with the qualitative results? Can we tell the difference between the model with the best and worst FID?
+
+% A few of the configurations used more parameters. Does parameter count correlate with lower FID?
+
+% Which model performed best? Describe it and hypothesize why.
+
+% Which model performed worst? Describe it and hypothesize why.
+
+% In general, did any of the models outperform the baseline?
+
+% In general, did any of the efficient attention models outperform the baseline?
+
+\subsubsection{Loss Curves}
+
+Figure~\ref{fig:training_loss} plots training loss and Figure~\ref{fig:valid_loss} plots validation loss for the network configurations we evaluate. 
+% Interpret the plots
+% Does validation loss correlate with training loss? (i.e., do the models with the best training loss get the best validation loss?)
+
+% If there is a significant difference between training loss and validation loss, this implies overfitting.
+% Suggest that a larger dataset or more regularization, in the form of data augmentation, weight decay, or dropout could be helpful.
+% Does weight decay lead to better validation loss?
+
+% Does validation loss correlate with FID? How robust is validation loss as a proxy for image quality?
+
+% How did training loss and validation loss evolve over time? Did trainig loss keep going down? Did validation loss keep going down or did it stagnate or worsen? Does that imply overfitting?

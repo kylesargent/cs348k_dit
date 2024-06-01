@@ -1,0 +1,15 @@
+\section{Evaluation}
+
+\paragraph{Fréchet Inception Distance.}
+With the goal of training a diffusion model that produces the best images possible, our metric is image quality, as measured by Frechét Inception Distance (FID). FID is the standard metric for evaluating generative models for images. The Fréchet distance is a measure between two probability distributions $\mu, \nu$ over $\mathbb {R} ^{n}$. It is defined as
+
+\begin{equation}
+    d_{F}(\mu ,\nu ):=\left(\inf _{\gamma \in \Gamma (\mu ,\nu )}\int _{\mathbb {R} ^{n}\times \mathbb {R} ^{n}}\|x-y\|^{2}\,\mathrm {d} \gamma (x,y)\right)^{1/2}, \label{eq:fd_def}
+\end{equation}
+
+where $\gamma (x,y)$ is the set of all couplings of $\mu$ and $\nu$. Fréchet \emph{Inception} Distance applies Eq.~\ref{eq:fd_def} by mapping samples from ground-truth and synthesized distributions to Inception~\cite{?} feature encodings before calculating the Frechét distance. Intuitively, a generative model that achieves a low FID score was a model that produced images whose distribution of Inception embeddings were very close to the distribution of Inception embeddings of the ground-truth data. FID is typically calculated with 50k generated and ground-truth images.
+
+
+\paragraph{Validation Loss.}
+
+Evaluating FID is expensive since each evaluation requires generating 50k synthesized images, each of which requires dozens of denoising network evaluations. For debugging purposes, and to get a more fine-grained estimate of relative performance over the course of training, we evaluate our loss function, Eq.~\ref{eq:loss} on a held-out subset of the dataset. For FFHQ, our training split contains  XXX images and our validation dataset contains XXX images.

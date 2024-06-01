@@ -1,0 +1,54 @@
+\section{Background}
+
+\subsection{Score-based Generative Models}
+
+\newcommand{\ex}{\boldsymbol{x}}
+\newcommand{\qvec}[1]{\textbf{\textit{#1}}}
+
+Score-based generative models (also called diffusion models) are a class of generative models that learn to gradually transform image-shaped samples of noise into images through an iterative process. Assume we are given a training dataset of images where each example in the dataset is drawn independently from an underlying data distribution $p_{\text{data}}(\boldsymbol{x})$. We desire to fit a model to $p_{\text{data}}(\boldsymbol{x})$ so that we can synthesize novel images by sampling from this distribution.
+
+Consider a range of noise levels, $\sigma_{\text{max}} > \ldots > \sigma_{0} = 0$, and the corresponding noisy image distributions $p(\ex, \sigma)$ defined as the data distribution convolved with Gaussian i.i.d. noise with variance $\sigma^2$. We aim to to learn a model that lets us move between noise levels, so that at every step, $\ex_i \sim p(\ex, \sigma_i)$. If we choose $\sigma_{\text{max}}$ to be large enough that the noise almost completely obscures the data and $p(\ex, \sigma_{\text{max}})$ is practically indistinguishable from Gaussian noise, then at inference, we can sample an initial noise image $\ex_T \sim \mathcal{N}(0, \sigma_{\text{max}}^2)$
+ and sequentially denoise it through our noise levels. If done successfully, the endpoint of the sampling chain, $\ex_0$, is distributed according to the data.
+
+Rather than a discrete set of $N$ noise levels, it is useful to consider the noise level as a continuous, time-dependent function $\sigma(t)$. The act of corrupting an image with noise can then be formulated as an It{\^o} stochastic differential equation (SDE). An SDE that describes this process is known as the Variance Exploding SDE:
+
+\begin{equation}
+    \text{d}\ex = \sqrt{2 \sigma(t) \frac{\text{d} \sigma(t)}{\text{d} t}}\text{d}\qvec{w}, \label{eq:ve_forward}
+\end{equation}
+
+where $\text{d}\qvec{w}$ is the standard Wiener process. Eq.~\ref{eq:ve_forward} has the following closed-form solution:
+
+\begin{equation}
+    p(\ex_t |\ex) = \mathcal{N}\left( \ex_t; \ex, \left[ \sigma^2 (t) - \sigma^2 (0) \right] \mathbf{I} \right). \label{eq:ve_closed_form}
+\end{equation}
+
+Simply put, we can transform an image into noise by either solving Eq.~\ref{eq:ve_forward}, or equivalently, by adding zero-mean i.i.d. Gaussian noise to the image (Eq.~\ref{eq:ve_closed_form}).
+
+Reversing Eq.~\ref{eq:ve_forward} yields the following reverse-time SDE:
+
+\begin{equation}
+    \text{d}\ex = - 2 \sigma(t) \frac{\text{d}\sigma (t)}{\text{d}t} \nabla_{\ex} \log p(\ex; \sigma(t)) \text{d} t + \sqrt{2 \sigma(t) \frac{\text{d} \sigma (t)}{\text{d} t}} \text{d} \qvec{w}, \label{eq:ve_reverse}
+\end{equation}
+
+the consequence of which is that we can transform noise into an image by solving Eq.~\ref{eq:ve_reverse}. We can solve stochastic differential equations numerically using Euler-Maruyama or one of many SDE solvers tailored for diffusion models.
+
+\subsection{Training Score-based Generative Models}
+
+We can sample images by drawing a random noisy image $\ex \sim \mathcal{N}(0, \sigma_{\text{max}}^2)$ and solving Eq.~\ref{eq:ve_reverse} to arrive at a synthesized image. However, in order to solve Eq.~\ref{eq:ve_reverse}, we need to be able to evaluate the score function, $\nabla_{\ex} \log p(\ex; \sigma(t))$. The idea behind neural-network-parameterized diffusion models is to train a neural network to predict the score function for us.
+
+Unfortunately, we do not generally have access to the ground-truth score function of the data distribution. Remarkably, for a denoiser function $D$ that minimizes the $L_2$ denoising error 
+
+\begin{equation}
+    \mathcal{L} = \mathbb{E}_{\qvec{y}\sim p_\text{data}} \mathbb{E}_{\qvec{n} \sim \mathcal{N}(\mathbf{0}, \sigma^2 \mathbf{I})}\|D(\qvec{y}+\qvec{n}; \sigma) - \qvec{y}\|^2_2, \label{eq:loss}
+\end{equation}
+    
+the score function can be easily obtained as
+    
+\begin{equation}
+    \nabla_{\ex} \log p(\ex; \sigma(t)) = (D(\ex;\sigma) - \ex)/\sigma^2 \label{eq:denoised_to_score}
+\end{equation}.
+
+Therefore, during training, we can draw images from the dataset, corrupt them with noise, and train a neural network to predict the clean output according to loss function defined in Eq.~\ref{eq:loss}. Eq.~\ref{eq:denoised_to_score} lets us reinterpret the prediction of this denoiser as the score function. This is known as denoising score-matching.
+
+In practice, many diffusion model implementations choose to predict the noise added to the image instead of the clean image. This ``epsilon prediction'' formulation corresponds exactly to denoising score-matching, with modified weights on the noise levels.
+
