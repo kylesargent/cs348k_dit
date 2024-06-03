@@ -48,7 +48,7 @@ from hybrid_models import HybridDiT_XL_2_Slow, HybridDiT_XL_2_Fast_Comp, HybridD
 from models_improved_transformer import DiT_plus_XL_2
 
 
-path_prefix = "/mnt/users/ericryanchan/repos/dit_k"
+path_prefix = "/mnt/users/ericryanchan/repos/dit_k/"
 
 experiments = [
     Experiment(
@@ -76,11 +76,11 @@ experiments = [
         exp_path=path_prefix + "results-hybrid/005-HybridDiT-XL-2-Fast-Comp-ReLU",
         model_class=HybridDiT_XL_2_Fast_Comp_ReLU,
     ),
-    Experiment(
-        "weight decay",
-        exp_path=path_prefix + "results-wd-1e-2/000-HybridDiT-XL-2",
-        model_class=DiT_XL_2,
-    ),
+    # Experiment(
+    #     "weight decay",
+    #     exp_path=path_prefix + "results-wd-1e-2/000-HybridDiT-XL-2",
+    #     model_class=HybridDiT_XL_2_Slow,
+    # ),
     Experiment(
         "swin",
         exp_path=path_prefix + "results-swin/000-DiT-XL-2-Swin7",
