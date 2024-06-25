@@ -369,6 +369,9 @@ def Mamba_M(**kwargs):
     return MambaDiT(depth=20, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
     # return MambaDiT(depth=14, hidden_size=768, patch_size=2, num_heads=16)
 
+def Mamba_L(**kwargs):
+    return MambaDiT(depth=20, hidden_size=1024, patch_size=1, num_heads=16, **kwargs)
+
 MambaModels = {
     'Mamba-M/2': Mamba_M,
 }

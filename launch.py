@@ -39,7 +39,7 @@ if __name__ == "__main__":
         nodes=1,
         gpus_per_node=NUM_TASKS_PER_NODE,
         tasks_per_node=NUM_TASKS_PER_NODE,
-        mem_gb=512,
+        mem_gb=256,
         cpus_per_task=8,
     )
     task = Task()
